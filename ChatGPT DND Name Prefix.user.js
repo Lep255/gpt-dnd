@@ -1,76 +1,88 @@
 // ==UserScript==
-// @name         ChatGPT DND Name Prefix (Stable)
+// @name         ChatGPT DND Prefix (Sanity + Badge)
 // @namespace    http://tampermonkey.net/
-// @version      1.3
-// @description  Reliably prefix ChatGPT messages with player name
-// @match        https://chatgpt.com/*
+// @version      1.0
+// @description  Adds a visible badge + prefixes messages
+// @match        https://chatgpt.com/c/*
+// @run-at       document-idle
 // @grant        none
 // ==/UserScript==
 
 (function () {
-    'use strict';
+  'use strict';
 
-    const PLAYER_NAME = 'Rodney';
-    const PREFIX = `[${PLAYER_NAME}]~ `;
+  const PLAYER_NAME = 'Rodney';
+  const PREFIX = `[${PLAYER_NAME}]~ `;
 
-    let editor = null;
+  // --- Visible badge so you KNOW it loaded ---
+  const badge = document.createElement('div');
+  badge.textContent = 'DND PREFIX ACTIVE';
+  badge.style.cssText = `
+    position: fixed; top: 10px; right: 10px;
+    z-index: 9999999;
+    background: rgba(0,0,0,.85);
+    color: #fff;
+    padding: 6px 10px;
+    border-radius: 8px;
+    font: 12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  `;
+  document.documentElement.appendChild(badge);
 
-    function findEditor() {
-        editor = document.querySelector('#prompt-textarea.ProseMirror');
-        return editor;
-    }
+  console.log('[DND PREFIX] script loaded');
 
-    function applyPrefix(reason) {
-        if (!editor) findEditor();
-        if (!editor) return;
+  function findEditor() {
+    return document.querySelector('#prompt-textarea.ProseMirror');
+  }
 
-        const text = editor.innerText.trim();
-        if (!text) return;
-        if (text.startsWith(PREFIX)) return;
+  function flash() {
+    badge.style.transform = 'scale(1.06)';
+    setTimeout(() => (badge.style.transform = ''), 120);
+  }
 
-        editor.innerText = PREFIX + text;
+  function applyPrefix(reason) {
+    const editor = findEditor();
+    if (!editor) return;
 
-        // restore caret
-        const range = document.createRange();
-        const sel = window.getSelection();
-        range.selectNodeContents(editor);
-        range.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(range);
+    const text = editor.innerText.trim();
+    if (!text) return;
+    if (text.startsWith(PREFIX)) return;
 
-        console.log('[DND PREFIX]', reason, editor.innerText);
-    }
+    editor.innerText = PREFIX + text;
 
-    function attachEditorHooks() {
-        if (!editor || editor.dataset.dndBound) return;
-        editor.dataset.dndBound = 'true';
+    // caret to end
+    const r = document.createRange();
+    const s = window.getSelection();
+    r.selectNodeContents(editor);
+    r.collapse(false);
+    s.removeAllRanges();
+    s.addRange(r);
 
-        // ENTER key inside editor
-        editor.addEventListener('keydown', e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                applyPrefix('enter');
-            }
-        }, true);
+    console.log('[DND PREFIX]', reason, editor.innerText);
+    flash();
+  }
 
-        console.log('[DND PREFIX] editor bound');
-    }
+  // Send button hook (early)
+  document.addEventListener(
+    'pointerdown',
+    (e) => {
+      const btn = e.target.closest('button[aria-label*="Send"],button[type="submit"]');
+      if (!btn) return;
+      applyPrefix('send');
+    },
+    true
+  );
 
-    // Hook send button EARLY
-    document.addEventListener('pointerdown', e => {
-        const btn = e.target.closest(
-            'button[aria-label*="Send"], button[type="submit"]'
-        );
-        if (!btn) return;
-        applyPrefix('send button');
-    }, true);
-
-    // Observe DOM changes (ChatGPT re-renders constantly)
-    const observer = new MutationObserver(() => {
-        if (!editor) {
-            if (findEditor()) attachEditorHooks();
-        }
-    });
-
-    observer.observe(document.body, { childList: true, subtree: true });
-
+  // Enter hook (in editor)
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key !== 'Enter' || e.shiftKey) return;
+      const editor = findEditor();
+      if (!editor) return;
+      // only when typing in the editor
+      if (!editor.contains(document.activeElement) && document.activeElement !== editor) return;
+      applyPrefix('enter');
+    },
+    true
+  );
 })();
