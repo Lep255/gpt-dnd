@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         ChatGPT DND Name Prefix (Observer)
+// @name         ChatGPT DND Name Prefix (Stable)
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  Automatically prefix ChatGPT messages with player name
+// @version      1.3
+// @description  Reliably prefix ChatGPT messages with player name
 // @match        https://chatgpt.com/*
 // @grant        none
 // ==/UserScript==
@@ -15,13 +15,13 @@
 
     let editor = null;
 
-    function getEditor() {
+    function findEditor() {
         editor = document.querySelector('#prompt-textarea.ProseMirror');
         return editor;
     }
 
-    function prefixMessage() {
-        if (!editor) editor = getEditor();
+    function applyPrefix(reason) {
+        if (!editor) findEditor();
         if (!editor) return;
 
         const text = editor.innerText.trim();
@@ -30,7 +30,7 @@
 
         editor.innerText = PREFIX + text;
 
-        // Move cursor to end
+        // restore caret
         const range = document.createRange();
         const sel = window.getSelection();
         range.selectNodeContents(editor);
@@ -38,35 +38,36 @@
         sel.removeAllRanges();
         sel.addRange(range);
 
-        console.log('Message prefixed:', editor.innerText);
+        console.log('[DND PREFIX]', reason, editor.innerText);
     }
 
-    function attachListeners() {
-        if (!editor) return;
+    function attachEditorHooks() {
+        if (!editor || editor.dataset.dndBound) return;
+        editor.dataset.dndBound = 'true';
 
-        // Avoid attaching multiple times
-        if (editor.dataset.dndPrefixAttached) return;
-        editor.dataset.dndPrefixAttached = 'true';
-
-        // Intercept Enter
+        // ENTER key inside editor
         editor.addEventListener('keydown', e => {
             if (e.key === 'Enter' && !e.shiftKey) {
-                prefixMessage();
+                applyPrefix('enter');
             }
-        });
+        }, true);
 
-        // Intercept Send buttons
-        document.addEventListener('click', e => {
-            const btn = e.target.closest('button[aria-label="Send"], button[type="submit"]');
-            if (!btn) return;
-            prefixMessage();
-        });
+        console.log('[DND PREFIX] editor bound');
     }
 
-    // Watch for editor dynamically
+    // Hook send button EARLY
+    document.addEventListener('pointerdown', e => {
+        const btn = e.target.closest(
+            'button[aria-label*="Send"], button[type="submit"]'
+        );
+        if (!btn) return;
+        applyPrefix('send button');
+    }, true);
+
+    // Observe DOM changes (ChatGPT re-renders constantly)
     const observer = new MutationObserver(() => {
         if (!editor) {
-            if (getEditor()) attachListeners();
+            if (findEditor()) attachEditorHooks();
         }
     });
 
