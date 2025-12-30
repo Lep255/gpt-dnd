@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         ChatGPT DND Prefix PreFill
+// @name         ChatGPT DND Prefix PreFill (ProseMirror-safe)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Pre-fills ChatGPT composer with [Name]~ so messages are always tagged
+// @version      1.1
+// @description  Pre-fills ChatGPT composer with [Name]~ before typing
 // @match        https://chatgpt.com/c/*
 // @run-at       document-idle
 // @grant        none
@@ -15,77 +15,111 @@
   const PREFIX = `[${PLAYER_NAME}]~ `;
 
   function getEditor() {
-    // ChatGPT composer contenteditable
-    return document.querySelector('#prompt-textarea.ProseMirror');
+    // Matches your provided HTML exactly
+    const el = document.querySelector('#prompt-textarea');
+    if (!el) return null;
+    if (el.getAttribute('contenteditable') !== 'true') return null;
+    return el;
   }
 
-  function setCaretToEnd(el) {
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    range.collapse(false);
+  function getPlainText(editor) {
+    // ProseMirror often includes trailing newlines / zero-width chars
+    return (editor.textContent || '').replace(/\u200B/g, '').trim();
+  }
+
+  function ensureFirstParagraph(editor) {
+    // Make sure there's at least one <p>
+    let p = editor.querySelector('p');
+    if (!p) {
+      p = document.createElement('p');
+      editor.innerHTML = '';
+      editor.appendChild(p);
+    }
+    return p;
+  }
+
+  function setCaretToEnd(node) {
     const sel = window.getSelection();
+    if (!sel) return;
+
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    range.collapse(false);
     sel.removeAllRanges();
     sel.addRange(range);
   }
 
-  function ensurePrefill(reason = '') {
+  function insertPrefix(editor, reason) {
+    const p = ensureFirstParagraph(editor);
+
+    // If prefix already present anywhere at the start, do nothing
+    const current = (p.textContent || '').replace(/\u200B/g, '');
+    if (current.startsWith(PREFIX)) return;
+
+    // If user already typed something, we’ll just prepend
+    p.textContent = PREFIX + current.trimStart();
+
+    // Remove placeholder class if present
+    p.classList.remove('placeholder');
+    p.removeAttribute('data-placeholder');
+
+    // Put caret at end so user can keep typing
+    requestAnimationFrame(() => setCaretToEnd(p));
+
+    // Debug (optional)
+    // console.log('[DND PREFILL]', reason, p.textContent);
+  }
+
+  function ensurePrefill(reason) {
     const editor = getEditor();
     if (!editor) return;
 
-    // innerText on ProseMirror is generally reliable for "what user sees"
-    const text = editor.innerText.replace(/\u200B/g, '').trim(); // strip zero-width
-    const hasPrefix = editor.innerText.startsWith(PREFIX);
+    const text = getPlainText(editor);
 
-    // If empty or just whitespace, inject prefix
+    // If empty OR only placeholder, add prefix
     if (!text) {
-      if (!hasPrefix) {
-        editor.innerText = PREFIX;
-        // give the DOM a moment then move caret
-        requestAnimationFrame(() => setCaretToEnd(editor));
-        // console.log('[DND PREFILL]', reason, 'inserted');
-      }
+      insertPrefix(editor, reason || 'empty');
       return;
     }
 
-    // If user started typing but prefix is missing (e.g., paste), add it once.
-    if (!hasPrefix) {
-      editor.innerText = PREFIX + editor.innerText;
-      requestAnimationFrame(() => setCaretToEnd(editor));
-      // console.log('[DND PREFILL]', reason, 'repaired');
+    // If they started typing but prefix is missing (paste, rerender), repair once
+    const p = ensureFirstParagraph(editor);
+    const first = (p.textContent || '').replace(/\u200B/g, '');
+    if (!first.startsWith(PREFIX)) {
+      insertPrefix(editor, reason || 'repair');
     }
   }
 
-  function bindEditor(editor) {
+  function bind(editor) {
     if (editor.dataset.dndPrefillBound) return;
     editor.dataset.dndPrefillBound = 'true';
 
-    // When user focuses into the box, ensure prefix exists
+    // Ensure on focus/click into the composer
     editor.addEventListener('focus', () => ensurePrefill('focus'), true);
+    editor.addEventListener('pointerdown', () => ensurePrefill('pointerdown'), true);
 
-    // When user types/deletes/pastes, keep prefix present
+    // Ensure while typing/pasting/deleting
     editor.addEventListener('input', () => ensurePrefill('input'), true);
 
-    // If they try to backspace into the prefix, restore it
+    // If they delete everything, restore prefix next frame
     editor.addEventListener('keydown', (e) => {
       if (e.key !== 'Backspace' && e.key !== 'Delete') return;
-
-      // If they’re about to delete the prefix area, restore on next frame
       requestAnimationFrame(() => ensurePrefill('delete'));
     }, true);
 
-    // Initial fill
-    ensurePrefill('bind');
+    // Initial prefill
+    ensurePrefill('init');
   }
 
-  // Watch for ChatGPT re-rendering the composer
+  // ChatGPT re-renders — observe and re-bind
   const obs = new MutationObserver(() => {
     const editor = getEditor();
-    if (editor) bindEditor(editor);
+    if (editor) bind(editor);
   });
 
   obs.observe(document.body, { childList: true, subtree: true });
 
-  // Try immediately too
-  const initial = getEditor();
-  if (initial) bindEditor(initial);
+  // Try immediately
+  const editorNow = getEditor();
+  if (editorNow) bind(editorNow);
 })();
