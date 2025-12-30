@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         ChatGPT DND Name Prefix Debug
+// @name         ChatGPT DND Name Prefix (Observer)
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  Automatically prefix ChatGPT messages with player name (with debug)
+// @version      1.2
+// @description  Automatically prefix ChatGPT messages with player name
 // @match        https://chatgpt.com/*
 // @grant        none
 // ==/UserScript==
@@ -13,27 +13,22 @@
     const PLAYER_NAME = 'Rodney';
     const PREFIX = `[${PLAYER_NAME}]~ `;
 
+    let editor = null;
+
     function getEditor() {
-        const editor = document.querySelector('#prompt-textarea.ProseMirror');
-        if (!editor) console.log('Editor not found!');
+        editor = document.querySelector('#prompt-textarea.ProseMirror');
         return editor;
     }
 
     function prefixMessage() {
-        const editor = getEditor();
+        if (!editor) editor = getEditor();
         if (!editor) return;
 
         const text = editor.innerText.trim();
-        console.log('Original text:', text);
-
         if (!text) return;
-        if (text.startsWith(PREFIX)) {
-            console.log('Already prefixed, skipping.');
-            return;
-        }
+        if (text.startsWith(PREFIX)) return;
 
         editor.innerText = PREFIX + text;
-        console.log('Prefixed text:', editor.innerText);
 
         // Move cursor to end
         const range = document.createRange();
@@ -42,27 +37,39 @@
         range.collapse(false);
         sel.removeAllRanges();
         sel.addRange(range);
+
+        console.log('Message prefixed:', editor.innerText);
     }
 
-    // Intercept Enter key
-    document.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            const editor = getEditor();
-            if (!editor) return;
-            if (!editor.contains(document.activeElement)) return;
+    function attachListeners() {
+        if (!editor) return;
 
-            console.log('Enter pressed in editor.');
+        // Avoid attaching multiple times
+        if (editor.dataset.dndPrefixAttached) return;
+        editor.dataset.dndPrefixAttached = 'true';
+
+        // Intercept Enter
+        editor.addEventListener('keydown', e => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                prefixMessage();
+            }
+        });
+
+        // Intercept Send buttons
+        document.addEventListener('click', e => {
+            const btn = e.target.closest('button[aria-label="Send"], button[type="submit"]');
+            if (!btn) return;
             prefixMessage();
+        });
+    }
+
+    // Watch for editor dynamically
+    const observer = new MutationObserver(() => {
+        if (!editor) {
+            if (getEditor()) attachListeners();
         }
-    }, true);
+    });
 
-    // Intercept Send button click
-    document.addEventListener('click', e => {
-        const btn = e.target.closest('button[aria-label="Send"], button[type="submit"]');
-        if (!btn) return;
-
-        console.log('Send button clicked.');
-        prefixMessage();
-    }, true);
+    observer.observe(document.body, { childList: true, subtree: true });
 
 })();
