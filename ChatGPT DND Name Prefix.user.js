@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         ChatGPT DND Name Prefix
+// @name         ChatGPT DND Name Prefix Debug
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Automatically prefix ChatGPT messages with player name
+// @version      1.1
+// @description  Automatically prefix ChatGPT messages with player name (with debug)
 // @match        https://chatgpt.com/*
 // @grant        none
 // ==/UserScript==
@@ -14,7 +14,9 @@
     const PREFIX = `[${PLAYER_NAME}]~ `;
 
     function getEditor() {
-        return document.querySelector('#prompt-textarea.ProseMirror');
+        const editor = document.querySelector('#prompt-textarea.ProseMirror');
+        if (!editor) console.log('Editor not found!');
+        return editor;
     }
 
     function prefixMessage() {
@@ -22,12 +24,16 @@
         if (!editor) return;
 
         const text = editor.innerText.trim();
-        if (!text) return;
+        console.log('Original text:', text);
 
-        // Prevent double prefix
-        if (text.startsWith(PREFIX)) return;
+        if (!text) return;
+        if (text.startsWith(PREFIX)) {
+            console.log('Already prefixed, skipping.');
+            return;
+        }
 
         editor.innerText = PREFIX + text;
+        console.log('Prefixed text:', editor.innerText);
 
         // Move cursor to end
         const range = document.createRange();
@@ -45,6 +51,7 @@
             if (!editor) return;
             if (!editor.contains(document.activeElement)) return;
 
+            console.log('Enter pressed in editor.');
             prefixMessage();
         }
     }, true);
@@ -54,6 +61,7 @@
         const btn = e.target.closest('button[aria-label="Send"], button[type="submit"]');
         if (!btn) return;
 
+        console.log('Send button clicked.');
         prefixMessage();
     }, true);
 
