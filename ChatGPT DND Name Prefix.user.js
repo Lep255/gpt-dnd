@@ -1,10 +1,10 @@
 // ==UserScript==
-// @name         ChatGPT DND Prefix PreFill (ProseMirror-safe)
+// @name         ChatGPT DND Prefix (BeforeInput - Reliable)
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  Pre-fills ChatGPT composer with [Name]~ before typing
-// @match        https://chatgpt.com/c/*
-// @run-at       document-idle
+// @version      1.2
+// @description  Prepend [Name]~ before the user starts typing (ProseMirror-safe)
+// @match        https://chatgpt.com/*
+// @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
@@ -14,112 +14,103 @@
   const PLAYER_NAME = 'Rodney';
   const PREFIX = `[${PLAYER_NAME}]~ `;
 
-  function getEditor() {
-    // Matches your provided HTML exactly
-    const el = document.querySelector('#prompt-textarea');
-    if (!el) return null;
-    if (el.getAttribute('contenteditable') !== 'true') return null;
-    return el;
+  function getEditorFromTarget(t) {
+    if (!t) return null;
+    const editor = t.closest?.('#prompt-textarea');
+    if (!editor) return null;
+    if (editor.getAttribute('contenteditable') !== 'true') return null;
+    return editor;
   }
 
-  function getPlainText(editor) {
-    // ProseMirror often includes trailing newlines / zero-width chars
+  function getEditorText(editor) {
     return (editor.textContent || '').replace(/\u200B/g, '').trim();
   }
 
-  function ensureFirstParagraph(editor) {
-    // Make sure there's at least one <p>
+  function setEditorText(editor, text) {
+    // Keep it simple: ensure there's a paragraph and set its textContent
     let p = editor.querySelector('p');
     if (!p) {
       p = document.createElement('p');
       editor.innerHTML = '';
       editor.appendChild(p);
     }
-    return p;
-  }
+    p.classList.remove('placeholder');
+    p.removeAttribute('data-placeholder');
+    p.textContent = text;
 
-  function setCaretToEnd(node) {
+    // caret to end
     const sel = window.getSelection();
     if (!sel) return;
-
     const range = document.createRange();
-    range.selectNodeContents(node);
+    range.selectNodeContents(p);
     range.collapse(false);
     sel.removeAllRanges();
     sel.addRange(range);
   }
 
-  function insertPrefix(editor, reason) {
-    const p = ensureFirstParagraph(editor);
+  function ensurePrefix(editor) {
+    const raw = (editor.textContent || '').replace(/\u200B/g, '');
+    if (raw.startsWith(PREFIX)) return true;
 
-    // If prefix already present anywhere at the start, do nothing
-    const current = (p.textContent || '').replace(/\u200B/g, '');
-    if (current.startsWith(PREFIX)) return;
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      setEditorText(editor, PREFIX);
+      return true;
+    }
 
-    // If user already typed something, we’ll just prepend
-    p.textContent = PREFIX + current.trimStart();
-
-    // Remove placeholder class if present
-    p.classList.remove('placeholder');
-    p.removeAttribute('data-placeholder');
-
-    // Put caret at end so user can keep typing
-    requestAnimationFrame(() => setCaretToEnd(p));
-
-    // Debug (optional)
-    // console.log('[DND PREFILL]', reason, p.textContent);
+    // If somehow text exists without prefix, prepend once
+    setEditorText(editor, PREFIX + trimmed);
+    return true;
   }
 
-  function ensurePrefill(reason) {
-    const editor = getEditor();
+  // 1) On focus/click into the editor, if empty -> insert prefix
+  document.addEventListener('focusin', (e) => {
+    const editor = getEditorFromTarget(e.target);
+    if (!editor) return;
+    if (!getEditorText(editor)) {
+      ensurePrefix(editor);
+    }
+  }, true);
+
+  document.addEventListener('pointerdown', (e) => {
+    const editor = getEditorFromTarget(e.target);
+    if (!editor) return;
+    if (!getEditorText(editor)) {
+      // Delay a tick so selection is established
+      requestAnimationFrame(() => ensurePrefix(editor));
+    }
+  }, true);
+
+  // 2) 핵심: BEFOREINPUT intercepts the very first character and injects prefix first
+  document.addEventListener('beforeinput', (e) => {
+    const editor = getEditorFromTarget(e.target);
     if (!editor) return;
 
-    const text = getPlainText(editor);
+    // Only act on actual text insertions/paste
+    const t = e.inputType || '';
+    const isTextInsert =
+      t.startsWith('insertText') ||
+      t.startsWith('insertCompositionText') ||
+      t === 'insertFromPaste';
 
-    // If empty OR only placeholder, add prefix
-    if (!text) {
-      insertPrefix(editor, reason || 'empty');
-      return;
+    if (!isTextInsert) return;
+
+    const current = (editor.textContent || '').replace(/\u200B/g, '');
+    if (current.startsWith(PREFIX)) return;
+
+    // If empty, we will insert PREFIX + whatever user is inserting (so they don’t lose their first char)
+    const incoming = (typeof e.data === 'string' ? e.data : '');
+    const base = current.trim();
+
+    e.preventDefault();
+
+    if (!base) {
+      // Empty editor: prefix + first typed character (if any)
+      setEditorText(editor, PREFIX + incoming);
+    } else {
+      // Non-empty but no prefix (rare): prepend and keep existing + incoming
+      setEditorText(editor, PREFIX + base + incoming);
     }
+  }, true);
 
-    // If they started typing but prefix is missing (paste, rerender), repair once
-    const p = ensureFirstParagraph(editor);
-    const first = (p.textContent || '').replace(/\u200B/g, '');
-    if (!first.startsWith(PREFIX)) {
-      insertPrefix(editor, reason || 'repair');
-    }
-  }
-
-  function bind(editor) {
-    if (editor.dataset.dndPrefillBound) return;
-    editor.dataset.dndPrefillBound = 'true';
-
-    // Ensure on focus/click into the composer
-    editor.addEventListener('focus', () => ensurePrefill('focus'), true);
-    editor.addEventListener('pointerdown', () => ensurePrefill('pointerdown'), true);
-
-    // Ensure while typing/pasting/deleting
-    editor.addEventListener('input', () => ensurePrefill('input'), true);
-
-    // If they delete everything, restore prefix next frame
-    editor.addEventListener('keydown', (e) => {
-      if (e.key !== 'Backspace' && e.key !== 'Delete') return;
-      requestAnimationFrame(() => ensurePrefill('delete'));
-    }, true);
-
-    // Initial prefill
-    ensurePrefill('init');
-  }
-
-  // ChatGPT re-renders — observe and re-bind
-  const obs = new MutationObserver(() => {
-    const editor = getEditor();
-    if (editor) bind(editor);
-  });
-
-  obs.observe(document.body, { childList: true, subtree: true });
-
-  // Try immediately
-  const editorNow = getEditor();
-  if (editorNow) bind(editorNow);
 })();
